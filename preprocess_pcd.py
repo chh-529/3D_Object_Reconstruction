@@ -1,133 +1,249 @@
+import argparse
 import os
-import cv2
-import open3d as o3d
+from glob import glob
+
 import numpy as np
-import matplotlib.pyplot as plt
-from dataloader import load_tum_pointclouds
+import open3d as o3d
+from dataset_presets import DATASET_CONFIGS, build_intrinsic_from_config, get_dataset_config
 
-def rgbd_to_pcd(count):
 
-    source_color = o3d.io.read_image('./train/spyderman2/rgb/align_test%d.png'%count)
-    source_depth = o3d.io.read_image('./train/spyderman2/depth/align_test_depth%d.png'%count)
+def rgbd_to_pcd(
+    color_path,
+    depth_path,
+    intrinsic,
+    depth_scale=1000.0,
+    depth_trunc=2.0,
+    convert_rgb_to_intensity=False,
+):
+    """Convert one RGB-D pair to a point cloud."""
+    if not os.path.exists(color_path):
+        raise FileNotFoundError(f"Color image not found: {color_path}")
+    if not os.path.exists(depth_path):
+        raise FileNotFoundError(f"Depth image not found: {depth_path}")
 
-    K = np.array(
-         [[597.522, 0.0, 312.885],
-         [0.0, 597.522, 239.870],
-         [0.0, 0.0, 1.0]], dtype=np.float64)
+    source_color = o3d.io.read_image(color_path)
+    source_depth = o3d.io.read_image(depth_path)
 
-    intrinsic = o3d.camera.PinholeCameraIntrinsic()
-    intrinsic.intrinsic_matrix = K
+    source_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        source_color,
+        source_depth,
+        depth_scale=depth_scale,
+        depth_trunc=depth_trunc,
+        convert_rgb_to_intensity=convert_rgb_to_intensity,
+    )
+    return o3d.geometry.PointCloud.create_from_rgbd_image(source_rgbd_image, intrinsic)
 
-    source_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(source_color, source_depth, depth_scale=1000, convert_rgb_to_intensity=False, depth_trunc=1)
-    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(source_rgbd_image, intrinsic)
-    # o3d.io.write_point_cloud('./pcd_o3d/spyderman2/spyderman2_%d.pcd' % count, pcd)
 
-    # Plane Segmentation
-    plane_model, inliers = pcd.segment_plane(distance_threshold=0.02,
-                                             ransac_n=3,
-                                             num_iterations=1000)
-    [a, b, c, d] = plane_model
-    print(f"Plane equation: {a:.2f}x + {b:.2f}y + {c:.2f}z + {d:.2f} = 0")
-    inlier_cloud = pcd.select_by_index(inliers)
-    inlier_cloud.paint_uniform_color([1.0, 0, 0])
-    outlier_cloud = pcd.select_by_index(inliers, invert=True)
-    # o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud])
-    # o3d.visualization.draw_geometries([outlier_cloud])
+def preprocess_pointcloud(
+    pcd,
+    voxel_size=0.01,
+    plane_distance_threshold=0.015,
+    plane_ransac_n=3,
+    plane_num_iterations=1000,
+    dbscan_eps=0.04,
+    dbscan_min_points=15,
+    y_max_threshold=None,
+    sor_nb_neighbors=20,
+    sor_std_ratio=2.0,
+):
+    """Reusable object-focused preprocessing pipeline for a single point cloud."""
+    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
 
-    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
+    _, inliers = pcd_down.segment_plane(
+        distance_threshold=plane_distance_threshold,
+        ransac_n=plane_ransac_n,
+        num_iterations=plane_num_iterations,
+    )
+    pcd_object = pcd_down.select_by_index(inliers, invert=True)
+
+    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
         labels = np.array(
-            outlier_cloud.cluster_dbscan(eps=0.02, # Epsilon defines the distance between to neighbors in a cluster
-                               min_points=500, # minimum number of points required to form a cluster
-                               print_progress=True))
+            pcd_object.cluster_dbscan(
+                eps=dbscan_eps,
+                min_points=dbscan_min_points,
+                print_progress=False,
+            )
+        )
 
-    max_label = labels.max()
-    print(f"point cloud has {max_label + 1} clusters")
+    valid_labels = labels[labels >= 0]
+    if valid_labels.size > 0:
+        largest_cluster_idx = np.argmax(np.bincount(valid_labels))
+        target_indices = np.where(labels == largest_cluster_idx)[0]
+        pcd_clean = pcd_object.select_by_index(target_indices)
+    else:
+        pcd_clean = pcd_object
 
-    # clusters = labels
-    indexes = np.where(labels == 0)
+    if y_max_threshold is not None and len(pcd_clean.points) > 0:
+        y = np.asarray(pcd_clean.points)[:, 1]
+        keep_idx = np.where(y < y_max_threshold)[0]
+        pcd_clean = pcd_clean.select_by_index(keep_idx.tolist())
 
-    # Extract Interest point clouds
-    interest_pcd = o3d.geometry.PointCloud()
-    interest_pcd.points = o3d.utility.Vector3dVector(np.asarray(outlier_cloud.points, np.float32)[indexes])
-    interest_pcd.colors = o3d.utility.Vector3dVector(np.asarray(outlier_cloud.colors, np.float32)[indexes])
+    _, ind = pcd_clean.remove_statistical_outlier(
+        nb_neighbors=sor_nb_neighbors,
+        std_ratio=sor_std_ratio,
+    )
+    return pcd_clean.select_by_index(ind)
 
-    colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
-    colors[labels < 0] = 0
-    outlier_cloud.colors = o3d.utility.Vector3dVector(colors[:, :3])
-    # o3d.visualization.draw_geometries([interest_pcd])
 
-    # Plane Segmentation for floor
-    # plane_model, inliers = interest_pcd.segment_plane(distance_threshold=0.001,
-    #                                          ransac_n=3,
-    #                                          num_iterations=1000)
-    # [a, b, c, d] = plane_model
-    # print(f"Plane equation: {a:.2f}x + {b:.2f}y + {c:.2f}z + {d:.2f} = 0")
-    # inlier_cloud = interest_pcd.select_by_index(inliers)
-    # inlier_cloud.paint_uniform_color([1.0, 0, 0])
-    # outlier_cloud = interest_pcd.select_by_index(inliers, invert=True)
-    # o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud])
+def process_rgbd_pair(
+    color_path,
+    depth_path,
+    output_path,
+    intrinsic,
+    depth_scale=1000.0,
+    depth_trunc=2.0,
+    preprocess_kwargs=None,
+):
+    """One-stop helper: RGB-D pair -> point cloud -> preprocessing -> save."""
+    if preprocess_kwargs is None:
+        preprocess_kwargs = {}
 
-    y = np.asarray(outlier_cloud.points)[:, 1]
-    y_mean = np.mean(y)
-    # plt.plot(y)
-    # plt.show()
-    # idx = np.array([i for i in range(len(z))], dtype=np.int)
-    idx = np.where(y < 0.18)[0]
-    idx = np.asarray(idx, dtype=np.int)
+    pcd = rgbd_to_pcd(
+        color_path=color_path,
+        depth_path=depth_path,
+        intrinsic=intrinsic,
+        depth_scale=depth_scale,
+        depth_trunc=depth_trunc,
+        convert_rgb_to_intensity=False,
+    )
+    pcd_final = preprocess_pointcloud(pcd, **preprocess_kwargs)
+    o3d.io.write_point_cloud(output_path, pcd_final)
+    return pcd_final
 
-    interest_pcd = outlier_cloud.select_by_index(list(idx))
-    # o3d.visualization.draw_geometries([interest_pcd])
 
-    print("Statistical oulier removal")
-    cl, ind = interest_pcd.remove_statistical_outlier(nb_neighbors=1000, std_ratio=0.8)
-    # o3d.visualization.draw_geometries([cl])
+def iter_rgbd_pairs(dataset_config):
+    dataset_path = dataset_config["dataset_path"]
+    dataset_type = dataset_config["dataset_type"]
 
-    print("Radius oulier removal")
-    cl, ind = cl.remove_radius_outlier(nb_points=100, radius=0.01)
-    o3d.visualization.draw_geometries([cl])
+    if dataset_type == "folder_pairs":
+        rgb_files = sorted(glob(os.path.join(dataset_path, dataset_config["rgb_glob"])))
+        depth_files = sorted(glob(os.path.join(dataset_path, dataset_config["depth_glob"])))
 
-    o3d.io.write_point_cloud('./pcd_o3d/spyderman2/spyderman2%d.pcd'%count, cl)
+        if len(rgb_files) != len(depth_files):
+            print("⚠️ Warning: RGB and Depth file counts do not match!")
 
-# if __name__ == '__main__':
-#     for i in range(1, 33):
-#         rgbd_to_pcd(i)
+        for index, (rgb_path, depth_path) in enumerate(zip(rgb_files, depth_files)):
+            yield index, rgb_path, depth_path
+
+    elif dataset_type == "association_file":
+        association_file = os.path.join(dataset_path, dataset_config["association_file"])
+        frame_index = 0
+        with open(association_file, "r", encoding="utf-8") as file_handle:
+            for line in file_handle:
+                if line.startswith("#"):
+                    continue
+
+                data = line.strip().split()
+                if len(data) != 4:
+                    continue
+
+                rgb_path = os.path.join(dataset_path, data[1])
+                depth_path = os.path.join(dataset_path, data[3])
+                if not os.path.exists(rgb_path) or not os.path.exists(depth_path):
+                    continue
+
+                yield frame_index, rgb_path, depth_path
+                frame_index += 1
+
+    else:
+        raise ValueError(f"Unsupported dataset_type: {dataset_type}")
+
+
+def clear_existing_pcds(output_dir):
+    existing_pcds = sorted(glob(os.path.join(output_dir, "*.pcd")))
+    if not existing_pcds:
+        return 0
+
+    for pcd_path in existing_pcds:
+        os.remove(pcd_path)
+    return len(existing_pcds)
+
+
+def run_dataset_preprocess(dataset_name, sample_every=None, limit=None, clean_output=True):
+    dataset_config = get_dataset_config(dataset_name)
+    output_dir = dataset_config["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    if clean_output:
+        removed_count = clear_existing_pcds(output_dir)
+        print(f"Cleaned {removed_count} existing .pcd files from '{output_dir}'.")
+
+    intrinsic = build_intrinsic_from_config(dataset_config["intrinsic"])
+    rgbd_config = dataset_config.get("rgbd", {})
+    preprocess_config = dataset_config.get("preprocess", {})
+
+    step = sample_every if sample_every is not None else dataset_config.get("sample_every", 1)
+    if step < 1:
+        raise ValueError("sample_every must be >= 1")
+    processed_count = 0
+
+    for index, rgb_path, depth_path in iter_rgbd_pairs(dataset_config):
+        if step > 1 and index % step != 0:
+            continue
+
+        output_name = f"cloud_bin_{processed_count:04d}.pcd"
+        output_path = os.path.join(output_dir, output_name)
+
+        print(f"Processing {processed_count}: {os.path.basename(rgb_path)}")
+        process_rgbd_pair(
+            color_path=rgb_path,
+            depth_path=depth_path,
+            output_path=output_path,
+            intrinsic=intrinsic,
+            depth_scale=rgbd_config.get("depth_scale", 1000.0),
+            depth_trunc=rgbd_config.get("depth_trunc", 2.0),
+            preprocess_kwargs=preprocess_config,
+        )
+
+        processed_count += 1
+        if limit is not None and processed_count >= limit:
+            break
+
+    print(f"Preprocessing complete! Processed {processed_count} point clouds saved to '{output_dir}'.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Preprocess RGB-D datasets into object point clouds")
+    parser.add_argument(
+        "--dataset",
+        default="redwood_stool",
+        choices=sorted(DATASET_CONFIGS.keys()),
+        help="Dataset preset to run",
+    )
+    parser.add_argument(
+        "--sample-every",
+        type=int,
+        default=None,
+        help="Process every N-th frame instead of the preset value",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Stop after processing this many point clouds",
+    )
+    parser.add_argument(
+        "--clean-output",
+        dest="clean_output",
+        action="store_true",
+        help="Delete existing .pcd files in output_dir before preprocessing (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-clean-output",
+        dest="clean_output",
+        action="store_false",
+        help="Keep existing .pcd files in output_dir",
+    )
+    parser.set_defaults(clean_output=True)
+
+    args = parser.parse_args()
+    run_dataset_preprocess(
+        args.dataset,
+        sample_every=args.sample_every,
+        limit=args.limit,
+        clean_output=args.clean_output,
+    )
+
 
 if __name__ == "__main__":
-    DATASET_DIR = "dataset/tum_fr1_desk"
-    ASSOC_FILE = "dataset/tum_fr1_desk/associated.txt"
-    OUT_DIR = "pcd_o3d"
-    
-    os.makedirs(OUT_DIR, exist_ok=True)
-    
-    # 1. 透過 DataLoader 載入所有點雲
-    print("正在載入點雲資料...")
-    pcds = load_tum_pointclouds(DATASET_DIR, ASSOC_FILE)
-    
-    # ⚠️ 重要技巧：降採樣幀數 (Frame Subsampling)
-    # TUM 資料集動輒 700~800 張照片，全跑 ICP 和 Pose Graph 會算到天荒地老。
-    # 為了快速驗證你的架構，我們先「每 10 張取 1 張」來做重建。
-    pcds_subset = pcds[::10] 
-    
-    print(f"取樣後共剩下 {len(pcds_subset)} 張點雲準備進行前處理。")
-    
-    # 2. 迴圈處理並存檔
-    for i, pcd in enumerate(pcds_subset):
-        print(f"Processing point cloud {i}...")
-        
-        # --- 這裡可以保留原作者的過濾邏輯 ---
-        # 1. 體素降採樣 (Voxel Downsampling) 以加速運算
-        pcd_down = pcd.voxel_down_sample(voxel_size=0.02)
-        
-        # 2. 移除離群雜訊 (Statistical Outlier Removal)
-        cl, ind = pcd_down.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-        pcd_clean = pcd_down.select_by_index(ind)
-        
-        # ⚠️ 注意：我這裡先移除了原作者的「移除平面」與「DBSCAN 聚類」
-        # 因為 TUM fr1/desk 是一個「場景 (辦公桌)」，如果你跑單一物件提取，
-        # 桌子和背景會不見，只剩下桌上的一個小杯子，會導致後面特徵對齊失敗。
-        
-        # 3. 將處理好的點雲依照原 Repo 的命名規則存檔
-        filename = os.path.join(OUT_DIR, f"cloud_bin_{i}.pcd")
-        o3d.io.write_point_cloud(filename, pcd_clean)
-        
-    print(f"前處理完成！所有點雲已存入 {OUT_DIR}/ 資料夾。")
+    main()
