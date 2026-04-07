@@ -91,15 +91,16 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
             print("Build o3d.pipelines.registration.PoseGraph")
             if target_id == source_id + 1:  # odometry case
 
-                init_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
+                sift_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
                     rgb_path[source_id], rgb_path[target_id],
                     depth_path[source_id], depth_path[target_id],
                     origin_pcds[source_id], origin_pcds[target_id],
                     distance_ratio=0.9)
-                # init_trans = relative_camera_poses_select(start_idx=source_id, end_idx=target_id, pose_list=relative_camera_poses)
-
-                # origin_pcds[source_id].estimate_normals()
-                # origin_pcds[target_id].estimate_normals()
+                if sift_trans is None:
+                    print(f'SIFT failed for pair ({source_id}, {target_id}), falling back to identity')
+                    init_trans = np.identity(4)
+                else:
+                    init_trans = np.array(sift_trans)
 
                 icp_fine = o3d.pipelines.registration.registration_icp(
                     origin_pcds[source_id], origin_pcds[target_id], threshold,
@@ -141,11 +142,16 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
     # Loop closure
     source_id = n_pcds - 1
     target_id = 0
-    init_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
+    sift_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
         rgb_path[source_id], rgb_path[target_id],
         depth_path[source_id], depth_path[target_id],
         origin_pcds[source_id], origin_pcds[target_id],
         distance_ratio=0.9)
+    if sift_trans is None:
+        print(f'SIFT failed for loop closure ({source_id} -> {target_id}), falling back to identity')
+        loop_init_trans = np.identity(4)
+    else:
+        loop_init_trans = np.array(sift_trans)
 
     origin_pcds[source_id].estimate_normals()
     origin_pcds[target_id].estimate_normals()
@@ -153,7 +159,7 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
     threshold = 0.01
     icp_fine = o3d.pipelines.registration.registration_icp(
         origin_pcds[source_id], origin_pcds[target_id], threshold,
-        init_trans,
+        loop_init_trans,
         o3d.pipelines.registration.TransformationEstimationPointToPlane())
     transformation_icp = icp_fine.transformation
     information_icp = o3d.pipelines.registration.get_information_matrix_from_point_clouds(
@@ -205,9 +211,6 @@ if __name__ == "__main__":
     voxel_size = args.voxel_size
     origin_pcds = load_orginal_point_clouds(voxel_size, pcds_paths)
     pcds_down = load_point_clouds(voxel_size, pcds_paths)
-
-    relative_camera_poses = relative_camera_poses_all(rgb_path, depth_path, origin_pcds)
-    print('pose shape:', relative_camera_poses.shape)
 
     print("Full registration ...")
     max_correspondence_distance_coarse = voxel_size * 10

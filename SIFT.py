@@ -113,8 +113,6 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
 
     img_matched = cv2.drawMatchesKnn(imgL, kp1, imgR, kp2, good_matches, None, matchColor=(0, 255, 0),
                        singlePointColor=(255, 0, 0), flags=2)
-    cv2.imshow('img_matched', img_matched)
-    cv2.waitKey(0)
 
     # Set array for keypoints
     pts1 = np.array(pts1)

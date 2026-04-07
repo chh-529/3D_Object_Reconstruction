@@ -85,8 +85,6 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
     print('Right Keypoint num:', len(kp2_1))
 
     img_matched = cv2.drawMatches(imgL, kp1, imgR, kp2, good_matches, None, matchColor=(0, 255, 0), singlePointColor=(255, 0, 0), flags=2)
-    cv2.imshow('img_matched', img_matched)
-    cv2.waitKey(0)
 
     # Set array for keypoints
     pts1 = np.array(pts1)
