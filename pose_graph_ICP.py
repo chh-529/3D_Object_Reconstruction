@@ -1,9 +1,16 @@
+import argparse
+import os
+import re
 import numpy as np
 import open3d as o3d
 from SIFT import SIFT_Transformation
 from registration import draw_registration_result
 from glob import glob
 import matplotlib.pyplot as plt
+
+
+def natural_sort_key(s):
+    return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', os.path.basename(s))]
 
 # Load point clouds
 def load_point_clouds(voxel_size=0.0, pcds_paths=None):
@@ -91,31 +98,32 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
 
 if __name__ == "__main__":
 
-    object = "spyderman2"
+    parser = argparse.ArgumentParser(description='3D Object Reconstruction using ICP')
+    parser.add_argument('--object', type=str, required=True,
+                        help='Object name (must match folder names under train/ and pcd_o3d/)')
+    parser.add_argument('--n_frames', type=int, default=None,
+                        help='Number of frames to use (default: auto-detect from pcd_o3d/<object>/)')
+    parser.add_argument('--voxel_size', type=float, default=0.001,
+                        help='Voxel size for downsampling (default: 0.001)')
+    args = parser.parse_args()
 
-    if object == "castard":
-        depth_path = ['./train/castard/depth/align_test_depth%d.png' % i for i in range(1, 21)]
-        rgb_path = ['./train/castard/rgb/align_test%d.png' % i for i in range(1, 21)]
-        pcds_paths = ['./pcd_o3d/castard/box%d.pcd' % i for i in range(1, 19)]
-    elif object == "new_box":
-        depth_path = ['./train/new_box2/depth/align_test_depth%d.png' % i for i in range(1, 19)]
-        rgb_path = ['./train/new_box2/rgb/align_test%d.png' % i for i in range(1, 19)]
-        pcds_paths = ['./pcd_o3d/new_box2/box1%d.pcd' % i for i in range(1, 19)]
-    elif object == "spyderman":
-        depth_path = ['./train/spyderman/depth/align_test_depth%d.png' % i for i in range(1, 17)]
-        rgb_path = ['./train/spyderman/rgb/align_test%d.png' % i for i in range(1, 17)]
-        pcds_paths = ['./pcd_o3d/spyderman/spyderman%d.pcd' % i for i in range(1, 17)]
-    elif object == "spyderman2":
-        depth_path = ['./train/spyderman/depth/align_test_depth%d.png' % i for i in range(1, 23)]
-        rgb_path = ['./train/spyderman/rgb/align_test%d.png' % i for i in range(1, 23)]
-        pcds_paths = ['./pcd_o3d/spyderman2/spyderman2%d.pcd' % i for i in range(1, 23)]
+    object_name = args.object
+    out_dir = f'./results/{object_name}'
+    os.makedirs(out_dir, exist_ok=True)
 
+    pcds_paths = sorted(glob(f'./pcd_o3d/{object_name}/*.pcd'), key=natural_sort_key)
+    if not pcds_paths:
+        raise FileNotFoundError(f'No .pcd files found in ./pcd_o3d/{object_name}/')
+
+    if args.n_frames is not None:
+        pcds_paths = pcds_paths[:args.n_frames]
+
+    print(f'Object: {object_name}, frames: {len(pcds_paths)}')
 
     # Define voxel size to Downsample
-    voxel_size = 0.001
+    voxel_size = args.voxel_size
     origin_pcds = load_orginal_point_clouds(voxel_size, pcds_paths)
     pcds_down = load_point_clouds(voxel_size, pcds_paths)
-    o3d.visualization.draw_geometries(pcds_down)
 
     print("Full registration ...")
     max_correspondence_distance_coarse = voxel_size * 15
@@ -139,37 +147,12 @@ if __name__ == "__main__":
             o3d.pipelines.registration.GlobalOptimizationConvergenceCriteria(),
             option)
 
-    print("Transform points and display")
+    print("Transform points and accumulate")
     accumulated_pcd = o3d.geometry.PointCloud()
     for point_id in range(len(pcds_down)):
         print(pose_graph.nodes[point_id].pose)
         accumulated_pcd += pcds_down[point_id].transform(pose_graph.nodes[point_id].pose)
-    o3d.visualization.draw_geometries([accumulated_pcd])
-    # o3d.io.write_point_cloud('accumulated_%s.pcd'%object, accumulated_pcd)
 
-    # y = np.asarray(accumulated_pcd.points)[:, 1]
-    # y_mean = np.mean(y)
-    # plt.plot(y)
-    # plt.show()
-    # # idx = np.array([i for i in range(len(z))], dtype=np.int)
-    # idx = np.where(y < 0.138)[0]
-    # idx = np.asarray(idx, dtype=np.int)
-    # interest_pcd = accumulated_pcd.select_by_index(list(idx))
-    # o3d.visualization.draw_geometries([interest_pcd])
-
-    # Render
-    vis = o3d.visualization.Visualizer()
-    vis.create_window('3DReconstructed')
-
-    for p in pcds_down:
-        vis.add_geometry(p)
-
-    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-    vis.add_geometry(axis)
-
-    opt = vis.get_render_option()
-    opt.background_color = np.asarray([1, 1, 1])
-    opt.point_size = 1.5
-
-    vis.run()
-    vis.destroy_window()
+    out_path = f'{out_dir}/accumulated_icp.pcd'
+    o3d.io.write_point_cloud(out_path, accumulated_pcd)
+    print(f'Saved accumulated point cloud to {out_path}')

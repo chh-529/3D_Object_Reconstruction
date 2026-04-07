@@ -64,7 +64,7 @@ align = rs.align(align_to)
 count = 0
 # Streaming loop
 try:
-    #Declare filters
+    # Declare filters
     dec_filter = rs.decimation_filter ()   # Decimation - reduces depth frame density. Value range [2-8]. Default is 2.
     spat_filter = rs.spatial_filter()      # Spatial    - edge-preserving spatial smoothing
     temp_filter = rs.temporal_filter()     # Temporal   - reduces temporal noise

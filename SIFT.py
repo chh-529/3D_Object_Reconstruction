@@ -1,5 +1,5 @@
 import open3d as o3d
-import open3d.cpu.pybind.utility
+# import open3d.cpu.pybind.utility
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -125,7 +125,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     for i in range(len(pts1)):
         matches_index = np.append(matches_index, np.array([i, i]))
     matches_index = matches_index.reshape(-1, 2)
-    correspondence_points = open3d.utility.Vector2iVector(matches_index)
+    correspondence_points = o3d.utility.Vector2iVector(matches_index)
 
     pts1_3d = []
     pts2_3d = []

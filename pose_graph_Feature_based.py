@@ -1,9 +1,17 @@
+import argparse
+import os
+import re
 import numpy as np
 import open3d as o3d
 from SIFT import SIFT_Transformation # SIFT feature points based registration
 from ORB import ORB_Transformation # ORB feature points based registration
 from LoFTR import LoFTR_Transformation # LoFTR method based registration
+from glob import glob
 import matplotlib.pyplot as plt
+
+
+def natural_sort_key(s):
+    return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', os.path.basename(s))]
 
 # Load point clouds
 def load_point_clouds(voxel_size=0.0, pcds_paths=None):
@@ -162,37 +170,41 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
 
 if __name__ == "__main__":
 
-    object = "spyderman" # "castard" or "spyderman"
+    parser = argparse.ArgumentParser(description='3D Object Reconstruction using Feature-based (SIFT) + ICP')
+    parser.add_argument('--object', type=str, required=True,
+                        help='Object name (must match folder names under train/ and pcd_o3d/)')
+    parser.add_argument('--n_frames', type=int, default=None,
+                        help='Number of frames to use (default: auto-detect)')
+    parser.add_argument('--voxel_size', type=float, default=0.001,
+                        help='Voxel size for downsampling (default: 0.001)')
+    args = parser.parse_args()
 
-    # Path
-    if object == "castard":
-        depth_path = ['./train/castard/depth/align_test_depth%d.png' % i for i in range(1, 6)]
-        rgb_path = ['./train/castard/rgb/align_test%d.png' % i for i in range(1, 6)]
-        pcds_paths = ['./pcd_o3d/castard/box1.pcd', './pcd_o3d/castard/box2.pcd', './pcd_o3d/castard/box3.pcd',
-                      './pcd_o3d/castard/box4.pcd', './pcd_o3d/castard/box5.pcd', './pcd_o3d/castard/box6.pcd',
-                      './pcd_o3d/castard/box7.pcd', './pcd_o3d/castard/box8.pcd', './pcd_o3d/castard/box9.pcd',
-                      './pcd_o3d/castard/box10.pcd', './pcd_o3d/castard/box11.pcd', './pcd_o3d/castard/box12.pcd',
-                      './pcd_o3d/castard/box13.pcd', './pcd_o3d/castard/box14.pcd', './pcd_o3d/castard/box15.pcd',
-                      './pcd_o3d/castard/box16.pcd', './pcd_o3d/castard/box17.pcd', './pcd_o3d/castard/box18.pcd',
-                      './pcd_o3d/castard/box19.pcd', './pcd_o3d/castard/box20.pcd']
-    elif object == "spyderman":
-        depth_path = ['./train/spyderman/depth/align_test_depth%d.png' % i for i in range(1, 17)]
-        rgb_path = ['./train/spyderman/rgb/align_test%d.png' % i for i in range(1, 17)]
-        pcds_paths = ['./pcd_o3d/spyderman/spyderman1.pcd', './pcd_o3d/spyderman/spyderman2.pcd',
-                      './pcd_o3d/spyderman/spyderman3.pcd', './pcd_o3d/spyderman/spyderman4.pcd',
-                      './pcd_o3d/spyderman/spyderman5.pcd', './pcd_o3d/spyderman/spyderman6.pcd',
-                      './pcd_o3d/spyderman/spyderman7.pcd', './pcd_o3d/spyderman/spyderman8.pcd',
-                      './pcd_o3d/spyderman/spyderman9.pcd', './pcd_o3d/spyderman/spyderman10.pcd',
-                      './pcd_o3d/spyderman/spyderman11.pcd', './pcd_o3d/spyderman/spyderman12.pcd',
-                      './pcd_o3d/spyderman/spyderman13.pcd', './pcd_o3d/spyderman/spyderman14.pcd',
-                      './pcd_o3d/spyderman/spyderman15.pcd', './pcd_o3d/spyderman/spyderman16.pcd'
-                      ]
+    object_name = args.object
+    out_dir = f'./results/{object_name}'
+    os.makedirs(out_dir, exist_ok=True)
+
+    rgb_path   = sorted(glob(f'./train/{object_name}/rgb/align_test*.png'),          key=natural_sort_key)
+    depth_path = sorted(glob(f'./train/{object_name}/depth/align_test_depth*.png'),  key=natural_sort_key)
+    pcds_paths = sorted(glob(f'./pcd_o3d/{object_name}/*.pcd'),                       key=natural_sort_key)
+
+    n = min(len(rgb_path), len(depth_path), len(pcds_paths))
+    if args.n_frames is not None:
+        n = min(n, args.n_frames)
+
+    if n == 0:
+        raise FileNotFoundError(f'No data found for object "{object_name}". '
+                                 f'Check train/{object_name}/ and pcd_o3d/{object_name}/')
+
+    rgb_path   = rgb_path[:n]
+    depth_path = depth_path[:n]
+    pcds_paths = pcds_paths[:n]
+
+    print(f'Object: {object_name}, frames: {n}')
 
     # Define voxel size to Downsample
-    voxel_size = 0.001
+    voxel_size = args.voxel_size
     origin_pcds = load_orginal_point_clouds(voxel_size, pcds_paths)
     pcds_down = load_point_clouds(voxel_size, pcds_paths)
-    o3d.visualization.draw_geometries(pcds_down)
 
     relative_camera_poses = relative_camera_poses_all(rgb_path, depth_path, origin_pcds)
     print('pose shape:', relative_camera_poses.shape)
@@ -220,37 +232,12 @@ if __name__ == "__main__":
             o3d.pipelines.registration.GlobalOptimizationConvergenceCriteria(),
             option)
 
-    print("Transform points and display")
+    print("Transform points and accumulate")
     accumulated_pcd = o3d.geometry.PointCloud()
     for point_id in range(len(pcds_down)):
         print(pose_graph.nodes[point_id].pose)
         accumulated_pcd += pcds_down[point_id].transform(pose_graph.nodes[point_id].pose)
-    o3d.visualization.draw_geometries([accumulated_pcd])
-    # o3d.io.write_point_cloud('accumulated_%s.pcd'%object, accumulated_pcd)
 
-    y = np.asarray(accumulated_pcd.points)[:, 1]
-    y_mean = np.mean(y)
-    plt.plot(y)
-    plt.show()
-    # idx = np.array([i for i in range(len(z))], dtype=np.int)
-    idx = np.where(y < 0.138)[0]
-    idx = np.asarray(idx, dtype=np.int)
-    interest_pcd = accumulated_pcd.select_by_index(list(idx))
-    o3d.visualization.draw_geometries([interest_pcd])
-
-    # Render
-    vis = o3d.visualization.Visualizer()
-    vis.create_window('3DReconstructed')
-
-    for p in pcds_down:
-        vis.add_geometry(p)
-
-    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-    vis.add_geometry(axis)
-
-    opt = vis.get_render_option()
-    opt.background_color = np.asarray([1, 1, 1])
-    opt.point_size = 1.5
-
-    vis.run()
-    vis.destroy_window()
+    out_path = f'{out_dir}/accumulated_feature.pcd'
+    o3d.io.write_point_cloud(out_path, accumulated_pcd)
+    print(f'Saved accumulated point cloud to {out_path}')
