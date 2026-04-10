@@ -8,19 +8,21 @@ import open3d as o3d
 from kornia_moons.feature import draw_LAF_matches
 from registration import match_ransac
 from utils import get_boundary
-
-# Intel RealSense D415
-depth_scaling_factor = 999.99
-focal_length = 597.522  ## mm
-img_center_x = 312.885
-img_center_y = 239.870
+from camera_config import CAMERAS
 
 def load_torch_image(fname):
     img = K.image_to_tensor(cv2.imread(fname), False).float() / 255. # Normalized Tensor
     img = K.color.bgr_to_rgb(img)
     return img
 
-def LoFTR_Transformation(img1_path, img2_path, depth_img1_path, depth_img2_path, pcd1, pcd2):
+def LoFTR_Transformation(img1_path, img2_path, depth_img1_path, depth_img2_path, pcd1, pcd2, camera='realsense_d415'):
+
+    cam = CAMERAS[camera]
+    depth_scaling_factor = cam['depth_scale']
+    focal_length_x = cam['fx']
+    focal_length_y = cam['fy']
+    img_center_x   = cam['cx']
+    img_center_y   = cam['cy']
 
     img1 = load_torch_image(img1_path)
     img2 = load_torch_image(img2_path)
@@ -108,8 +110,8 @@ def LoFTR_Transformation(img1_path, img2_path, depth_img1_path, depth_img2_path,
 
         # Normalized image plane -> (u, v, 1) * z = zu, zv, z
         z = np.asarray(depthL, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor # in mm distance
-        x = (u - img_center_x) * z / focal_length
-        y = (v - img_center_y) * z / focal_length
+        x = (u - img_center_x) * z / focal_length_x
+        y = (v - img_center_y) * z / focal_length_y
         pts1_3d = np.append(pts1_3d, np.array([x, y, z], dtype=np.float32))
 
     for i in range(pts2.shape[0]):
@@ -119,8 +121,8 @@ def LoFTR_Transformation(img1_path, img2_path, depth_img1_path, depth_img2_path,
 
         # Normalized image plane
         z = np.asarray(depthR, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor # in mm distance
-        x = (u - img_center_x) * z / focal_length
-        y = (v - img_center_y) * z / focal_length
+        x = (u - img_center_x) * z / focal_length_x
+        y = (v - img_center_y) * z / focal_length_y
         pts2_3d = np.append(pts2_3d, np.array([x, y, z], dtype=np.float32))
 
     pts1_3d = pts1_3d.reshape(-1, 3)

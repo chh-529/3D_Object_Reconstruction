@@ -5,24 +5,20 @@ import cv2
 import matplotlib.pyplot as plt
 from registration import match_ransac
 from utils import get_boundary
-
-########################################################################################################################
-# Intrinsic parameter of Intel RealSense D415
-########################################################################################################################
-K = np.array(
-    [[597.522, 0.0, 312.885],
-     [0.0, 597.522, 239.870],
-     [0.0, 0.0, 1.0]], dtype=np.float64)
-
-intrinsic = o3d.camera.PinholeCameraIntrinsic()
-intrinsic.intrinsic_matrix = K
-print(intrinsic.intrinsic_matrix)
+from camera_config import CAMERAS
 
 ########################################################################################################################
 # Feature matching using SIFT algorithm
 # Find transformation matrix from corresponding points based on SIFT
 ########################################################################################################################
-def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pcd):
+def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pcd, camera='realsense_d415'):
+    cam = CAMERAS[camera]
+    depth_scaling_factor = cam['depth_scale']
+    focal_length_x = cam['fx']
+    focal_length_y = cam['fy']
+    img_center_x   = cam['cx']
+    img_center_y   = cam['cy']
+
     # Read image from path
     imgL = cv2.imread(img1)
     imgR = cv2.imread(img2)
@@ -30,17 +26,11 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
     depthR = np.array(o3d.io.read_image(depth_img2), np.float32)
 
     # Clip depth value
-    threshold = 3000  # 3m limit
-    left_idx = np.where(depthL > threshold)
+    threshold = depth_scaling_factor * 3  # 3m limit
+    left_idx  = np.where(depthL > threshold)
     right_idx = np.where(depthR > threshold)
-    depthL[left_idx] = threshold
+    depthL[left_idx]  = threshold
     depthR[right_idx] = threshold
-
-    # Intel RealSense D415
-    depth_scaling_factor = 999.99
-    focal_length = 597.522  ## mm
-    img_center_x = 312.885
-    img_center_y = 239.870
 
     # Create ORB
     orb = cv2.ORB_create()
@@ -107,8 +97,8 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
 
         # Normalized image plane -> (u, v, 1) * z = zu, zv, z
         z = np.asarray(depthL, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor  # in mm distance
-        x = (u - img_center_x) * z / focal_length
-        y = (v - img_center_y) * z / focal_length
+        x = (u - img_center_x) * z / focal_length_x
+        y = (v - img_center_y) * z / focal_length_y
         pts1_3d = np.append(pts1_3d, np.array([x, y, z], dtype=np.float32))
 
     for i in range(pts2.shape[0]):
@@ -118,8 +108,8 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
 
         # Normalized image plane
         z = np.asarray(depthR, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor  # in mm distance
-        x = (u - img_center_x) * z / focal_length
-        y = (v - img_center_y) * z / focal_length
+        x = (u - img_center_x) * z / focal_length_x
+        y = (v - img_center_y) * z / focal_length_y
         pts2_3d = np.append(pts2_3d, np.array([x, y, z], dtype=np.float32))
 
     pts1_3d = pts1_3d.reshape(-1, 3)

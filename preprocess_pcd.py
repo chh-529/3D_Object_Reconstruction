@@ -1,22 +1,29 @@
+import argparse
+import os
 import cv2
 import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
+from camera_config import CAMERAS
 
-def rgbd_to_pcd(count):
+def rgbd_to_pcd(count, object_name, cam):
 
-    source_color = o3d.io.read_image('./train/spyderman2/rgb/align_test%d.png'%count)
-    source_depth = o3d.io.read_image('./train/spyderman2/depth/align_test_depth%d.png'%count)
+    source_color = o3d.io.read_image(f'./train/{object_name}/rgb/align_test{count}.png')
+    source_depth = o3d.io.read_image(f'./train/{object_name}/depth/align_test_depth{count}.png')
 
     K = np.array(
-         [[597.522, 0.0, 312.885],
-         [0.0, 597.522, 239.870],
-         [0.0, 0.0, 1.0]], dtype=np.float64)
+         [[cam['fx'], 0.0,        cam['cx']],
+          [0.0,       cam['fy'],  cam['cy']],
+          [0.0,       0.0,        1.0      ]], dtype=np.float64)
 
     intrinsic = o3d.camera.PinholeCameraIntrinsic()
     intrinsic.intrinsic_matrix = K
 
-    source_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(source_color, source_depth, depth_scale=1000, convert_rgb_to_intensity=False, depth_trunc=1)
+    source_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        source_color, source_depth,
+        depth_scale=cam['depth_scale'],
+        convert_rgb_to_intensity=False,
+        depth_trunc=cam['depth_trunc'])
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(source_rgbd_image, intrinsic)
     # o3d.io.write_point_cloud('./pcd_o3d/spyderman2/spyderman2_%d.pcd' % count, pcd)
 
@@ -71,7 +78,7 @@ def rgbd_to_pcd(count):
     # plt.show()
     # idx = np.array([i for i in range(len(z))], dtype=np.int)
     idx = np.where(y < 0.18)[0]
-    idx = np.asarray(idx, dtype=np.int)
+    idx = np.asarray(idx, dtype=int)
 
     interest_pcd = outlier_cloud.select_by_index(list(idx))
     # o3d.visualization.draw_geometries([interest_pcd])
@@ -82,10 +89,37 @@ def rgbd_to_pcd(count):
 
     print("Radius oulier removal")
     cl, ind = cl.remove_radius_outlier(nb_points=100, radius=0.01)
-    o3d.visualization.draw_geometries([cl])
 
-    o3d.io.write_point_cloud('./pcd_o3d/spyderman2/spyderman2%d.pcd'%count, cl)
+    out_dir = f'./pcd_o3d/{object_name}'
+    os.makedirs(out_dir, exist_ok=True)
+    o3d.io.write_point_cloud(f'{out_dir}/{object_name}{count}.pcd', cl)
 
 if __name__ == '__main__':
-    for i in range(1, 33):
-        rgbd_to_pcd(i)
+    parser = argparse.ArgumentParser(description='Convert RGBD images to preprocessed point clouds')
+    parser.add_argument('--object', type=str, required=True,
+                        help='Object name (folder under train/ and pcd_o3d/)')
+    parser.add_argument('--camera', type=str, default='realsense_d415',
+                        choices=list(CAMERAS.keys()),
+                        help='Camera intrinsics preset (default: realsense_d415)')
+    parser.add_argument('--n_frames', type=int, default=None,
+                        help='Number of frames to process (default: auto-detect)')
+    args = parser.parse_args()
+
+    cam = CAMERAS[args.camera]
+    object_name = args.object
+
+    from glob import glob
+    import re
+    def natural_sort_key(s):
+        return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', os.path.basename(s))]
+
+    rgb_files = sorted(glob(f'./train/{object_name}/rgb/align_test*.png'), key=natural_sort_key)
+    n = len(rgb_files) if args.n_frames is None else min(len(rgb_files), args.n_frames)
+    if n == 0:
+        raise FileNotFoundError(f'No align_test*.png found in ./train/{object_name}/rgb/. '
+                                 f'Run prepare_dataset.py first if using TUM/Redwood data.')
+
+    print(f'Object: {object_name}, camera: {args.camera}, frames: {n}')
+    for i in range(1, n + 1):
+        print(f'Processing frame {i}/{n}...')
+        rgbd_to_pcd(i, object_name, cam)

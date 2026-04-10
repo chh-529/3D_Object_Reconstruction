@@ -8,6 +8,7 @@ from ORB import ORB_Transformation # ORB feature points based registration
 from LoFTR import LoFTR_Transformation # LoFTR method based registration
 from glob import glob
 import matplotlib.pyplot as plt
+from camera_config import CAMERAS
 
 
 def natural_sort_key(s):
@@ -95,7 +96,7 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
                     rgb_path[source_id], rgb_path[target_id],
                     depth_path[source_id], depth_path[target_id],
                     origin_pcds[source_id], origin_pcds[target_id],
-                    distance_ratio=0.9)
+                    distance_ratio=0.9, camera=camera)
                 if sift_trans is None:
                     print(f'SIFT failed for pair ({source_id}, {target_id}), falling back to identity')
                     init_trans = np.identity(4)
@@ -146,7 +147,7 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
         rgb_path[source_id], rgb_path[target_id],
         depth_path[source_id], depth_path[target_id],
         origin_pcds[source_id], origin_pcds[target_id],
-        distance_ratio=0.9)
+        distance_ratio=0.9, camera=camera)
     if sift_trans is None:
         print(f'SIFT failed for loop closure ({source_id} -> {target_id}), falling back to identity')
         loop_init_trans = np.identity(4)
@@ -183,8 +184,12 @@ if __name__ == "__main__":
                         help='Number of frames to use (default: auto-detect)')
     parser.add_argument('--voxel_size', type=float, default=0.001,
                         help='Voxel size for downsampling (default: 0.001)')
+    parser.add_argument('--camera', type=str, default='realsense_d415',
+                        choices=list(CAMERAS.keys()),
+                        help='Camera intrinsics preset (default: realsense_d415)')
     args = parser.parse_args()
 
+    camera = args.camera
     object_name = args.object
     out_dir = f'./results/{object_name}'
     os.makedirs(out_dir, exist_ok=True)
