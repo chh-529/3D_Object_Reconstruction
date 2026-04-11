@@ -51,8 +51,8 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
     kp2_1 = []
 
     # Get bounding area of object projection
-    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(source_pcd)
-    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(target_pcd)
+    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(source_pcd, camera=camera)
+    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(target_pcd, camera=camera)
     print(source_x_min, source_x_max, source_y_min, source_y_max)
     print(target_x_min, target_x_max, target_y_min, target_y_max)
 
@@ -91,7 +91,7 @@ def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pc
     pts2_3d = []
 
     for i in range(pts1.shape[0]):
-        # Image plane -> 픽셀값
+        # Image plane -> pixel coordinates
         u = np.float64(pts1[i][0])
         v = np.float64(pts1[i][1])
 

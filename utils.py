@@ -2,6 +2,7 @@ import numpy as np
 import open3d as o3d
 import cv2
 from scipy.spatial.transform import Rotation
+from camera_config import CAMERAS
 from SIFT import *
 
 def transform_3d_points(points_3d, transformation):
@@ -49,13 +50,13 @@ def preprocess_point_cloud(pcd, voxel_size):
 
     return pcd_down, pcd_fpfh
 
-def get_boundary(source_pcd):
+def get_boundary(source_pcd, camera='realsense_d415'):
 
-    # Intrinsic parameter for Realsense D415
-    depth_scaling_factor = 999.99
-    focal_length = 597.522
-    img_center_x = 312.885
-    img_center_y = 239.870
+    cam = CAMERAS[camera]
+    focal_length_x = cam['fx']
+    focal_length_y = cam['fy']
+    img_center_x   = cam['cx']
+    img_center_y   = cam['cy']
 
     x_min = np.min(np.asarray(source_pcd.points)[:, 0])
     x_max = np.max(np.asarray(source_pcd.points)[:, 0])
@@ -67,10 +68,10 @@ def get_boundary(source_pcd):
     y_min_idx = np.where(np.asarray(source_pcd.points)[:, 1] == y_min)
     y_max_idx = np.where(np.asarray(source_pcd.points)[:, 1] == y_max)
 
-    u_min = x_min * focal_length / (np.asarray(source_pcd.points)[x_min_idx][0][2]) + img_center_x
-    u_max = x_max * focal_length / (np.asarray(source_pcd.points)[x_max_idx][0][2]) + img_center_x
-    v_min = y_min * focal_length / (np.asarray(source_pcd.points)[y_min_idx][0][2]) + img_center_y
-    v_max = y_max * focal_length / (np.asarray(source_pcd.points)[y_max_idx][0][2]) + img_center_y
+    u_min = x_min * focal_length_x / (np.asarray(source_pcd.points)[x_min_idx][0][2]) + img_center_x
+    u_max = x_max * focal_length_x / (np.asarray(source_pcd.points)[x_max_idx][0][2]) + img_center_x
+    v_min = y_min * focal_length_y / (np.asarray(source_pcd.points)[y_min_idx][0][2]) + img_center_y
+    v_max = y_max * focal_length_y / (np.asarray(source_pcd.points)[y_max_idx][0][2]) + img_center_y
 
     return u_min, u_max, v_min, v_max
 

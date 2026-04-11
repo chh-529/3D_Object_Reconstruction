@@ -74,49 +74,55 @@ def pairwise_registration(source, target, init_trans):
         icp_fine.transformation)
     return transformation_icp, information_icp
 
-def full_registration(pcds, max_correspondence_distance_coarse, max_correspondence_distance_fine, relative_camera_poses=None):
+def full_registration(pcds, max_correspondence_distance_coarse, max_correspondence_distance_fine,
+                      relative_camera_poses=None, loop_window=1):
+    """
+    Build pose graph.
+
+    loop_window : int
+        Each frame connects to the next `loop_window` frames as certain edges
+        (via SIFT+ICP).  Non-adjacent pairs beyond this window are not added,
+        which avoids polluting the graph with bad identity-init ICP results.
+        Default 1 means only adjacent pairs (standard odometry chain).
+    """
     pose_graph = o3d.pipelines.registration.PoseGraph()
     odometry = np.identity(4)
     pose_graph.nodes.append(o3d.pipelines.registration.PoseGraphNode(odometry))
-    n_pcds = len(pcds) # 16
+    n_pcds = len(pcds)
+
+    # Store per-adjacent-pair transforms for chaining
+    adj_transforms = {}  # key: (i, i+1) → 4×4 numpy array
+
     for source_id in range(n_pcds):
-        for target_id in range(source_id + 1, n_pcds):
-            print('source id:', source_id)
-            print('target id:', target_id)
+        for target_id in range(source_id + 1, min(source_id + loop_window + 1, n_pcds)):
+            print(f'source id: {source_id}  target id: {target_id}')
             threshold = 0.001
 
-            init_trans = np.identity(4)
-            transformation_icp, information_icp = pairwise_registration(pcds_down[source_id], pcds_down[target_id],
-                                                                        init_trans)
+            sift_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
+                rgb_path[source_id], rgb_path[target_id],
+                depth_path[source_id], depth_path[target_id],
+                origin_pcds[source_id], origin_pcds[target_id],
+                distance_ratio=0.9, camera=camera)
+            if sift_trans is None:
+                print(f'SIFT failed for pair ({source_id}, {target_id}), falling back to identity')
+                init_trans = np.identity(4)
+            else:
+                init_trans = np.array(sift_trans)
+
+            icp_fine = o3d.pipelines.registration.registration_icp(
+                origin_pcds[source_id], origin_pcds[target_id], threshold,
+                init_trans,
+                o3d.pipelines.registration.TransformationEstimationPointToPoint())
+            transformation_icp = icp_fine.transformation
+
+            information_icp = o3d.pipelines.registration.get_information_matrix_from_point_clouds(
+                origin_pcds[source_id], origin_pcds[target_id], threshold,
+                transformation_icp)
 
             print("Build o3d.pipelines.registration.PoseGraph")
             if target_id == source_id + 1:  # odometry case
-
-                sift_trans, pcd1_features, source_pcd1_features, pts1, pts_source_1, pts1_3d, pts_source1_3d = SIFT_Transformation(
-                    rgb_path[source_id], rgb_path[target_id],
-                    depth_path[source_id], depth_path[target_id],
-                    origin_pcds[source_id], origin_pcds[target_id],
-                    distance_ratio=0.9, camera=camera)
-                if sift_trans is None:
-                    print(f'SIFT failed for pair ({source_id}, {target_id}), falling back to identity')
-                    init_trans = np.identity(4)
-                else:
-                    init_trans = np.array(sift_trans)
-
-                icp_fine = o3d.pipelines.registration.registration_icp(
-                    origin_pcds[source_id], origin_pcds[target_id], threshold,
-                    init_trans,
-                    o3d.pipelines.registration.TransformationEstimationPointToPoint())
-                transformation_icp = icp_fine.transformation
-
-                information_icp = o3d.pipelines.registration.get_information_matrix_from_point_clouds(
-                    origin_pcds[source_id], origin_pcds[target_id], threshold,
-                    transformation_icp)
-
-                # visualize transformation icp result
-                # draw_registration_result(pcds_down[source_id], pcds_down[target_id], transformation_icp, mode='rgb')
-
-                odometry = np.dot((transformation_icp), odometry)
+                odometry = np.dot(transformation_icp, odometry)
+                adj_transforms[(source_id, target_id)] = transformation_icp
 
                 pose_graph.nodes.append(
                     o3d.pipelines.registration.PoseGraphNode(
@@ -127,13 +133,8 @@ def full_registration(pcds, max_correspondence_distance_coarse, max_corresponden
                                                              transformation_icp,
                                                              information_icp,
                                                              uncertain=False))
-            else:  # Connect any non-neighboring nodes
-
-                # transformation_icp = relative_camera_poses_select(start_idx=source_id, end_idx=target_id, pose_list=relative_camera_poses)
-                # information_icp = o3d.pipelines.registration.get_information_matrix_from_point_clouds(
-                #     origin_pcds[source_id], origin_pcds[target_id], threshold,
-                #     transformation_icp)
-
+            else:
+                # Near non-adjacent pair within window → add as uncertain edge
                 pose_graph.edges.append(
                     o3d.pipelines.registration.PoseGraphEdge(source_id,
                                                              target_id,
@@ -187,6 +188,13 @@ if __name__ == "__main__":
     parser.add_argument('--camera', type=str, default='realsense_d415',
                         choices=list(CAMERAS.keys()),
                         help='Camera intrinsics preset (default: realsense_d415)')
+    parser.add_argument('--loop_window', type=int, default=1,
+                        help='Each frame connects to the next N frames via SIFT+ICP. '
+                             'Increasing beyond 1 adds uncertain edges within the window. '
+                             'Default 1 means only adjacent pairs (avoids identity-init garbage edges).')
+    parser.add_argument('--pcd_pattern', type=str, default='*.pcd',
+                        help='Glob pattern for PCD files under pcd_o3d/<object>/ '
+                             '(default: *.pcd). Example: "spyderman2[0-9]*.pcd"')
     args = parser.parse_args()
 
     camera = args.camera
@@ -196,7 +204,7 @@ if __name__ == "__main__":
 
     rgb_path   = sorted(glob(f'./train/{object_name}/rgb/align_test*.png'),          key=natural_sort_key)
     depth_path = sorted(glob(f'./train/{object_name}/depth/align_test_depth*.png'),  key=natural_sort_key)
-    pcds_paths = sorted(glob(f'./pcd_o3d/{object_name}/*.pcd'),                       key=natural_sort_key)
+    pcds_paths = sorted(glob(f'./pcd_o3d/{object_name}/{args.pcd_pattern}'),          key=natural_sort_key)
 
     n = min(len(rgb_path), len(depth_path), len(pcds_paths))
     if args.n_frames is not None:
@@ -224,7 +232,7 @@ if __name__ == "__main__":
         pose_graph = full_registration(pcds_down,
                                        max_correspondence_distance_coarse,
                                        max_correspondence_distance_fine,
-                                       )
+                                       loop_window=args.loop_window)
 
     print("Optimizing PoseGraph ...")
     option = o3d.pipelines.registration.GlobalOptimizationOption(

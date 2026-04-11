@@ -32,8 +32,8 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     depthL[left_idx]  = threshold
     depthR[right_idx] = threshold
 
-    # sift = cv2.xfeatures2d.SIFT_create() # OpenCV 4.5 미만 버젼 사용중일 시
-    sift = cv2.SIFT_create() # OpenCV 4.5 이상의 버전 사용중일 시
+    # sift = cv2.xfeatures2d.SIFT_create() # For OpenCV version < 4.5
+    sift = cv2.SIFT_create() # For OpenCV version >= 4.5
 
     # Find keypoints and descriptors using SIFT
     kp1, des1 = sift.detectAndCompute(imgL, None)
@@ -77,12 +77,12 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     pts2 = []
     kp1_1 = []
     kp2_1 = []
-    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(source_pcd)
-    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(target_pcd)
+    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(source_pcd, camera=camera)
+    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(target_pcd, camera=camera)
     print(source_x_min, source_x_max, source_y_min, source_y_max)
     print(target_x_min, target_x_max, target_y_min, target_y_max)
 
-    # depth map에서 위치의 min, max x, y 찾아서 마스킹해서 outlier 제거
+    # Find min/max x, y bounds from depth map to mask keypoints and remove outliers
     for i, (m, n) in enumerate(matches):
         if m.distance < distance_ratio * n.distance: # 0.6 for castard,
             if (kp1[m.queryIdx].pt[0] >= source_x_min and kp1[m.queryIdx].pt[0] <= source_x_max):
@@ -120,7 +120,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     pts2_3d = []
 
     for i in range(pts1.shape[0]):
-        # Image plane -> 픽셀값
+        # Image plane -> pixel coordinates
         u = np.float64(pts1[i][0])
         v = np.float64(pts1[i][1])
 

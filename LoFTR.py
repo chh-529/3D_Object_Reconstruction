@@ -51,8 +51,8 @@ def LoFTR_Transformation(img1_path, img2_path, depth_img1_path, depth_img2_path,
 
     pts1 = []
     pts2 = []
-    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(pcd1)
-    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(pcd2)
+    source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(pcd1, camera=camera)
+    target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(pcd2, camera=camera)
 
     # depth map에서 위치의 min, max x, y 찾아서 마스킹해서 outlier 제거
     for idx in range(len(mkpts0)):
